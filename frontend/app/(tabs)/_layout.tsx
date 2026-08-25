@@ -1,7 +1,21 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/src/lib/api';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
+import { BlurView } from 'expo-blur';
+
+function GlassTabBar() {
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      <BlurView
+        intensity={Platform.OS === 'ios' ? 80 : 60}
+        tint="light"
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(249,249,247,0.75)' }]} />
+    </View>
+  );
+}
 
 export default function TabsLayout() {
   return (
@@ -11,19 +25,22 @@ export default function TabsLayout() {
         tabBarActiveTintColor: COLORS.brandPrimary,
         tabBarInactiveTintColor: COLORS.textMuted,
         tabBarStyle: {
-          backgroundColor: COLORS.surface2,
+          position: 'absolute',
           borderTopColor: COLORS.border,
-          height: Platform.OS === 'ios' ? 84 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
-          paddingTop: 8,
+          height: Platform.OS === 'ios' ? 86 : 68,
+          paddingBottom: Platform.OS === 'ios' ? 26 : 10,
+          paddingTop: 10,
+          backgroundColor: 'transparent',
+          elevation: 0,
         },
+        tabBarBackground: () => <GlassTabBar />,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Aujourd\'hui',
+          title: "Aujourd'hui",
           tabBarIcon: ({ color, size }) => <Ionicons name="today" size={size} color={color} />,
           tabBarButtonTestID: 'tab-home',
         }}

@@ -18,6 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { api, COLORS } from '@/src/lib/api';
 import { storage } from '@/src/lib/storage';
+import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 
 const HERO = 'https://images.unsplash.com/photo-1558017487-06bf9f82613a?crop=entropy&cs=srgb&fm=jpg&w=1200&q=85';
 
@@ -101,6 +102,7 @@ export default function Onboarding() {
           </View>
 
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <FadeInUp key={step} delay={0} distance={24}>
             {step === 0 && (
               <View>
                 <Text style={styles.eyebrow}>Bienvenue sur Nutriscan</Text>
@@ -248,23 +250,28 @@ export default function Onboarding() {
                 </Text>
               </View>
             )}
+            </FadeInUp>
           </ScrollView>
 
           <View style={styles.footer}>
-            <Pressable
+            <BouncyPressable
               testID="onboarding-continue-button"
               onPress={step === 5 ? finish : next}
               disabled={!canProceed() || loading}
+              hapticStyle="medium"
               style={[styles.cta, (!canProceed() || loading) && styles.ctaDisabled]}
             >
               {loading ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.ctaText}>
-                  {step === 5 ? 'Commencer' : 'Continuer'}
-                </Text>
+                <>
+                  <Text style={styles.ctaText}>
+                    {step === 5 ? "C'est parti" : 'Continuer'}
+                  </Text>
+                  <Ionicons name={step === 5 ? 'sparkles' : 'arrow-forward'} size={18} color="#fff" style={{ marginLeft: 6 }} />
+                </>
               )}
-            </Pressable>
+            </BouncyPressable>
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -334,7 +341,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingVertical: 18,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
   },
   ctaDisabled: { opacity: 0.4 },
-  ctaText: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  ctaText: { color: '#fff', fontSize: 17, fontWeight: '700' },
 });

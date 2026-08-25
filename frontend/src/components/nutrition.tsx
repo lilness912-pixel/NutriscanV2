@@ -1,34 +1,59 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import { View, StyleSheet, Text } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withDelay,
+  interpolate,
+  Easing,
+} from 'react-native-reanimated';
 import { COLORS } from '@/src/lib/api';
 
-type Props = {
-  size?: number;
-  stroke?: number;
-  progress: number; // 0-1
-  color?: string;
-  bg?: string;
-  children?: React.ReactNode;
-};
-
-// SVG-free ring using nested Views + rotation trick.
-// For MVP we use a simple half-circle overlay approach.
-export function ProgressRing({
-  size = 180,
-  stroke = 14,
+/** Progress ring animated 0 -> target on mount using rotation trick */
+export function AnimatedProgressRing({
+  size = 190,
+  stroke = 16,
   progress,
   color = COLORS.brandPrimary,
   bg = COLORS.brandTertiary,
+  duration = 1200,
   children,
-}: Props) {
-  const clamped = Math.max(0, Math.min(1, progress));
-  const angle = clamped * 360;
+}: {
+  size?: number;
+  stroke?: number;
+  progress: number; // 0..1+
+  color?: string;
+  bg?: string;
+  duration?: number;
+  children?: React.ReactNode;
+}) {
+  const p = Math.max(0, Math.min(1, progress));
+  const shared = useSharedValue(0);
 
-  const halfRotation = Math.min(180, angle);
-  const secondRotation = angle > 180 ? angle - 180 : 0;
+  useEffect(() => {
+    shared.value = 0;
+    shared.value = withTiming(p, {
+      duration,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [p, duration, shared]);
+
+  const firstHalfStyle = useAnimatedStyle(() => {
+    const angle = shared.value * 360;
+    const rot = Math.min(180, angle);
+    return { transform: [{ rotate: `${-45 + rot}deg` }] };
+  });
+
+  const secondHalfStyle = useAnimatedStyle(() => {
+    const angle = shared.value * 360;
+    const opacity = angle > 180 ? 1 : 0;
+    const rot = angle > 180 ? angle - 180 : 0;
+    return { transform: [{ rotate: `${135 + rot}deg` }], opacity };
+  });
 
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Background ring */}
       <View
         style={{
           position: 'absolute',
@@ -39,7 +64,7 @@ export function ProgressRing({
           borderColor: bg,
         }}
       />
-      {/* First half (0-180deg) */}
+      {/* First 180deg */}
       <View
         style={{
           position: 'absolute',
@@ -58,44 +83,46 @@ export function ProgressRing({
             overflow: 'hidden',
           }}
         >
-          <View
-            style={{
-              width: size,
-              height: size,
-              borderRadius: size / 2,
-              borderWidth: stroke,
-              borderColor: 'transparent',
-              borderTopColor: color,
-              borderRightColor: color,
-              position: 'absolute',
-              left: -size / 2,
-              transform: [{ rotate: `${-45 + halfRotation}deg` }],
-            }}
+          <Animated.View
+            style={[
+              {
+                width: size,
+                height: size,
+                borderRadius: size / 2,
+                borderWidth: stroke,
+                borderColor: 'transparent',
+                borderTopColor: color,
+                borderRightColor: color,
+                position: 'absolute',
+                left: -size / 2,
+              },
+              firstHalfStyle,
+            ]}
           />
         </View>
       </View>
-      {/* Second half (180-360deg) */}
-      {angle > 180 && (
+      {/* Second 180deg */}
+      <View
+        style={{
+          position: 'absolute',
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          overflow: 'hidden',
+        }}
+      >
         <View
           style={{
             position: 'absolute',
-            width: size,
+            right: size / 2,
+            width: size / 2,
             height: size,
-            borderRadius: size / 2,
             overflow: 'hidden',
           }}
         >
-          <View
-            style={{
-              position: 'absolute',
-              right: size / 2,
-              width: size / 2,
-              height: size,
-              overflow: 'hidden',
-            }}
-          >
-            <View
-              style={{
+          <Animated.View
+            style={[
+              {
                 width: size,
                 height: size,
                 borderRadius: size / 2,
@@ -105,29 +132,43 @@ export function ProgressRing({
                 borderRightColor: color,
                 position: 'absolute',
                 right: -size / 2,
-                transform: [{ rotate: `${135 + secondRotation}deg` }],
-              }}
-            />
-          </View>
+              },
+              secondHalfStyle,
+            ]}
+          />
         </View>
-      )}
+      </View>
       <View style={{ alignItems: 'center', justifyContent: 'center' }}>{children}</View>
     </View>
   );
 }
 
-export function MacroBar({
+/** Animated macro bar that fills on mount */
+export function AnimatedMacroBar({
   label,
   value,
   target,
   color,
+  delay = 0,
 }: {
   label: string;
   value: number;
   target: number;
   color: string;
+  delay?: number;
 }) {
   const pct = Math.min(1, target > 0 ? value / target : 0);
+  const shared = useSharedValue(0);
+
+  useEffect(() => {
+    shared.value = 0;
+    shared.value = withDelay(delay, withTiming(pct, { duration: 900, easing: Easing.out(Easing.cubic) }));
+  }, [pct, delay, shared]);
+
+  const style = useAnimatedStyle(() => ({
+    width: `${interpolate(shared.value, [0, 1], [0, 100])}%`,
+  }));
+
   return (
     <View style={styles.macroWrap}>
       <View style={styles.macroHead}>
@@ -140,12 +181,13 @@ export function MacroBar({
         </Text>
       </View>
       <View style={styles.track}>
-        <View style={[styles.fill, { width: `${pct * 100}%`, backgroundColor: color }]} />
+        <Animated.View style={[styles.fill, { backgroundColor: color }, style]} />
       </View>
     </View>
   );
 }
 
+// intentionally re-declare Text/StyleSheet local
 const styles = StyleSheet.create({
   macroWrap: { marginBottom: 12 },
   macroHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
