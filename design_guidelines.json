@@ -1,0 +1,171 @@
+{
+  "app_name": "Nutriscan",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A clean, data-forward, sensory-rich iOS experience that balances beautiful food imagery with highly legible, confident nutritional metrics.",
+  "color": {
+    "surface": { "light": "#F9F9F7", "dark": "#0A0A0A" },
+    "onSurface": { "light": "#1C1C1E", "dark": "#FFFFFF" },
+    "surfaceSecondary": { "light": "#FFFFFF", "dark": "#151515" },
+    "onSurfaceSecondary": { "light": "#3A3A3C", "dark": "#EBEBF5" },
+    "surfaceTertiary": { "light": "#F0F0EA", "dark": "#1E1E1E" },
+    "onSurfaceTertiary": { "light": "#636366", "dark": "#A0A0A5" },
+    "surfaceInverse": { "light": "#1C1C1E", "dark": "#F9F9F7" },
+    "onSurfaceInverse": { "light": "#F9F9F7", "dark": "#1C1C1E" },
+    "brand": { "light": "#6B8E6B", "dark": "#789B78" },
+    "brandPrimary": { "light": "#4A6B4A", "dark": "#8BB18B" },
+    "onBrandPrimary": { "light": "#FFFFFF", "dark": "#0F1A0F" },
+    "brandSecondary": { "light": "#E1EBE1", "dark": "#2C402C" },
+    "onBrandSecondary": { "light": "#2C402C", "dark": "#E1EBE1" },
+    "brandTertiary": { "light": "#F0F5F0", "dark": "#1A261A" },
+    "onBrandTertiary": { "light": "#4A6B4A", "dark": "#8BB18B" },
+    "success": { "light": "#34C759", "dark": "#30D158" },
+    "onSuccess": { "light": "#FFFFFF", "dark": "#000000" },
+    "warning": { "light": "#FF9500", "dark": "#FF9F0A" },
+    "onWarning": { "light": "#FFFFFF", "dark": "#000000" },
+    "error": { "light": "#FF3B30", "dark": "#FF453A" },
+    "onError": { "light": "#FFFFFF", "dark": "#000000" },
+    "info": { "light": "#6B8E6B", "dark": "#789B78" },
+    "onInfo": { "light": "#FFFFFF", "dark": "#0F1A0F" },
+    "border": { "light": "#E5E5E0", "dark": "#2C2C2E" },
+    "borderStrong": { "light": "#C7C7C0", "dark": "#48484A" },
+    "divider": { "light": "#E5E5E0", "dark": "#2C2C2E" }
+  },
+  "typography": {
+    "displayFontFamily": "Geist",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24,
+      "3xl": 48
+    }
+  },
+  "spacing": {
+    "rule": "Generous iOS native padding; cards never flush to edges. Large safe-area padding at bottom for sticky CTAs.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use glass on bottom tab bar to let scrolling content peek through.",
+      "Use glass on sticky headers and floating bottom CTAs.",
+      "Apply translucent tinted base under glass to ensure readability."
+    ],
+    "dont's": [
+      "Never apply glass to dense macro cards or form fields.",
+      "Do not use glass without a sufficient tinted backdrop."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Onboarding",
+      "purpose": "A visually engaging personalization questionnaire to gather age, weight, and fitness goals.",
+      "states": {
+        "loading": "Subtle skeleton loaders inside the input fields.",
+        "empty": "N/A",
+        "error": "Inline red error text below the invalid field with a shake animation."
+      },
+      "layout": "Full-bleed background image with vertical gradient scrim (transparent to surfaceInverse). Persistent progress bar at the top. Large display text for the question. Touch-friendly selection cards for choices (gender, goal), and large sticky brandPrimary CTA at bottom."
+    },
+    {
+      "name": "Home (Today)",
+      "purpose": "The daily command center displaying calorie/macro rings and the logged meals journal.",
+      "states": {
+        "loading": "Central iOS spinner with skeleton macro rings.",
+        "empty": "Use the empty plate illustration + 'No meals logged today' text + 'Scan a Meal' primary button.",
+        "error": "Error toast at top + 'Tap to retry loading your journal'."
+      },
+      "layout": "Top section: A large hero card featuring circular progress rings for calories and linear bars for macros. Typography uses tabular numerals (tnum) for all stats to avoid jitter. Below: 'Today's Meals' grouped into breakfast, lunch, dinner, snacks. Each logged meal is a horizontal card (surfaceSecondary) with a leading thumbnail image of the scanned food, title, and calorie count."
+    },
+    {
+      "name": "Camera / Scan",
+      "purpose": "A frictionless, one-tap AI food scanning interface.",
+      "states": {
+        "loading": "Animated scanning reticle over the camera view with a colorful gradient processing bar.",
+        "empty": "Camera view active, waiting for subject.",
+        "error": "Modal over camera: 'Could not detect food. Please try again or log manually.'"
+      },
+      "layout": "Full-screen camera view. Large, pill-shaped 'Capture' button sticky at the bottom center. After capture, a bottom sheet glides up showing the AI's editable result card with a confidence score, detected food title, serving size editor, and immediate macros breakdown."
+    },
+    {
+      "name": "Meal Plan",
+      "purpose": "Personalized AI-generated meal plan based on user's profile and progress.",
+      "states": {
+        "loading": "Shimmering horizontal meal cards.",
+        "empty": "Empty state illustration + 'Let our AI generate your first meal plan'.",
+        "error": "Standard readable message with Retry CTA."
+      },
+      "layout": "Segmented control at the top (Days of the week). Vertical list of meal cards. Each card uses a full-width background photo of the meal with a top-to-bottom dark scrim, overlaying the meal title, prep time, and macros in white (onSurfaceInverse) at the bottom."
+    },
+    {
+      "name": "Progress / History",
+      "purpose": "Weekly and monthly macro and calorie trends.",
+      "states": {
+        "loading": "Skeleton charts.",
+        "empty": "Empty state illustration showing 'Log a full week to unlock trends'.",
+        "error": "Retry button centered on the screen."
+      },
+      "layout": "Data-heavy interface with elevated chart cards (surfaceSecondary). Large typography for weekly averages. Tabular numerals. Tonal background strips alternating to separate weeks."
+    }
+  ],
+  "images": {
+    "hero_healthy_bowl": {
+      "url": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwxfHxoZWFsdGh5JTIwZm9vZCUyMGJvd2wlMjBmcmVzaHxlbnwwfHx8fDE3ODc2Mjg4MTR8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Top down view of a fresh, colorful vegetable and protein healthy bowl."
+    },
+    "empty_plate_diet": {
+      "url": "https://images.pexels.com/photos/6586823/pexels-photo-6586823.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Minimalist single blueberry on an empty white plate."
+    },
+    "onboarding_fitness": {
+      "url": "https://images.unsplash.com/photo-1558017487-06bf9f82613a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHx3b3Jrb3V0JTIwaGVhbHRoeSUyMGxpZmVzdHlsZSUyMGFic3RyYWN0fGVufDB8fHx8MTc4NzYyODgxNHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Person holding a healthy drink above dumbbells, fitness lifestyle abstract."
+    }
+  },
+  "haptics": {
+    "onboarding_choice": "selection",
+    "onboarding_continue": "impactLight",
+    "camera_capture": "impactMedium",
+    "scan_success": "notificationSuccess",
+    "meal_logged": "notificationSuccess",
+    "tab_change": "selection",
+    "macro_ring_fill": "impactLight"
+  },
+  "instructions_to_main_agent": [
+    "Follow the '1 iOS-Native Clean' personality tightly. DO NOT introduce blues, purples, or indigo. Stick to the Sage Green (brand) and grayscale/monochrome UI to let the food imagery shine.",
+    "For the daily calorie/macro rings and large stat numbers, ensure you implement tabular numerals (fontVariant: ['tabular-nums']) to prevent the layout from jumping when data updates.",
+    "Onboarding requires a visually engaging flow: use the `onboarding_fitness` image as a full-bleed background with a heavy bottom scrim so the questions and CTAs remain perfectly legible.",
+    "For the Scan flow, focus on a frictionless experience. Implement a 'reticle' overlay during the camera view, and present the AI results in an immediate, editable bottom sheet so users can correct the AI if it's wrong.",
+    "Use `expo-glass-effect` (or `expo-blur` on Android) for the bottom tab bar and any sticky header, ensuring you place a semi-transparent tinted backdrop beneath it for readability.",
+    "Whenever text is placed over food images (like the Meal Plan cards), ALWAYS use a gradient scrim (transparent to surfaceInverse) and position the text at the bottom. Never overlay text without a scrim."
+  ]
+}

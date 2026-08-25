@@ -1,0 +1,43 @@
+{
+  "summary": "Comprehensive backend + frontend testing for Nutriscan (Expo/React Native + FastAPI + Gemini 3 Flash). Backend: 13/13 pytest tests pass individually; profile CRUD with BMR/TDEE (Mifflin-St Jeor) verified, meals CRUD + summary + progress verified, /meals/scan analyzed a real salad photo and returned valid nutrition JSON, /mealplan/generate produced a 7-day plan. Frontend: 6-step onboarding flow completes and redirects to tabs; Home, Plan (empty), Progress (stats + 7-day chart + profile summary), and Scan screens all render correctly with expected content in French.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/meals/scan + POST /api/mealplan/generate (parallel)", "issue": "Emergent LLM concurrency limit (429 CONCURRENCY_REQUEST_LIMIT) when both AI endpoints hit in parallel. Sequential execution works fine. Not a code bug — provider plan limitation. Consider serializing/queuing AI calls or documenting the constraint."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "(tabs)/_layout.tsx", "issue": "Tab bar items lack testID props (no scan-tab / plan-tab / progress-tab / home-tab). Navigation still works via visible label text, but adds testIDs would improve test robustness.", "testID": "missing tab-* testIDs", "priority": "LOW"},
+      {"component": "scan.tsx", "issue": "'Galerie' button missing testID (scan-camera-button exists but scan-gallery-button missing).", "testID": "scan-gallery-button", "priority": "LOW"},
+      {"component": "progress.tsx", "issue": "'Réinitialiser mon profil' reset control missing testID (progress-reset-button).", "testID": "progress-reset-button", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Onboarding step 1", "issues": ["Console warning: 'shadow*' style props are deprecated. Use 'boxShadow'. — cosmetic only."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Add testIDs to tab bar items in app/(tabs)/_layout.tsx (home-tab, scan-tab, plan-tab, progress-tab) for reliable E2E navigation.",
+    "Add testID='scan-gallery-button' to the Galerie button in app/(tabs)/scan.tsx.",
+    "Add testID='progress-reset-button' to the reset control in app/(tabs)/progress.tsx.",
+    "Optional: replace deprecated 'shadow*' style props with 'boxShadow' to silence React Native Web console warning.",
+    "Optional: throttle/queue AI calls or inform users that scan + plan generation can't run concurrently on current LLM plan (429 concurrency limit)."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses env vars correctly (MONGO_URL, DB_NAME, EMERGENT_LLM_KEY), strips _id from all Mongo reads, uses UUIDs for ids, and validates via Pydantic. No hardcoded secrets.",
+    "Mifflin-St Jeor implementation is correct; verified against 30yo male 180cm/75kg moderate/maintain -> 2682 kcal.",
+    "extract_json helper handles markdown code fences robustly, good.",
+    "MealPlan.days typed as List[dict] — acceptable since AI schema is nested, but a stricter Pydantic model would improve validation.",
+    "No auth as per spec (local AsyncStorage profile) — acceptable."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py (new)", "/app/test_reports/iteration_1.json (new)"],
+  "success_rate": {"backend": "100% (13/13 when run sequentially; 12/13 in parallel run due to LLM concurrency limit — not a bug)", "frontend": "100% for tested flows (onboarding + all 4 tab screens render + navigation)"},
+  "seed_data_creation": "Created a profile via UI onboarding (Alex, 30yo, male, 180cm, 75kg, moderate, maintain -> 2682 kcal) and via backend tests (TEST_User). One TEST_Oatmeal meal was created and then deleted.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: https://health-meal-planner-12.preview.emergentagent.com/api. Pytest suite at /app/backend/tests/backend_test.py. NOTE: running the two AI tests in parallel hits Emergent LLM concurrency 429; run pytest without xdist parallelism when re-testing AI, or split into two invocations. Frontend flow: onboarding must be completed within one browser session (AsyncStorage does not persist across separate Playwright sessions). Use text-based selectors for tab navigation until tab testIDs are added.",
+  "rca_of_issue": "The single parallel-run failure of /api/meals/scan is a rate-limit response (HTTP 429 CONCURRENCY_REQUEST_LIMIT) from the Emergent LLM proxy when /api/mealplan/generate is already in flight. Cause: current LLM plan disallows concurrent requests. Reproduction: run pytest with pytest-xdist so TestAIScan and TestAIMealPlan execute simultaneously. Mitigation: run AI tests serially, upgrade LLM plan, or add server-side queueing/backoff around LlmChat.send_message."
+}
