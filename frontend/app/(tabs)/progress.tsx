@@ -72,6 +72,27 @@ export default function ProgressScreen() {
     );
   };
 
+  const doDeleteAccount = async () => {
+    Alert.alert(
+      'Supprimer ton compte ?',
+      'Ton profil, tes repas, tes plans et ton compte seront supprimés définitivement. Cette action est irréversible.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.deleteAccount();
+            } catch (_) { /* ignore */ }
+            await signOut();
+            router.replace('/login');
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
@@ -204,6 +225,12 @@ export default function ProgressScreen() {
             </Text>
           </BouncyPressable>
         </FadeInUp>
+        <FadeInUp delay={420}>
+          <BouncyPressable onPress={doDeleteAccount} hapticStyle="light" style={styles.deleteAccountBtn} testID="delete-account-button">
+            <Ionicons name="trash-outline" size={16} color={COLORS.textMuted} />
+            <Text style={{ color: COLORS.textMuted, fontWeight: '600', fontSize: 13 }}>Supprimer mon compte</Text>
+          </BouncyPressable>
+        </FadeInUp>
       </ScrollView>
     </SafeAreaView>
   );
@@ -307,5 +334,9 @@ const styles = StyleSheet.create({
   resetBtn: {
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8,
     marginTop: 24, padding: 14, marginHorizontal: 16,
+  },
+  deleteAccountBtn: {
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6,
+    marginTop: 4, padding: 10, marginHorizontal: 16,
   },
 });

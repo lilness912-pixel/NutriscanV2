@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 6 — deployment-readiness fix verification. 11/11 backend tests PASS in /app/backend/tests/test_iter6_deploy_fixes.py. All 4 fixes verified plus regression smoke: (FIX 1) frontend/.env line 5 is well-formed with quoted METRO_CACHE_ROOT and backend is up. (FIX 2) EMERGENT_AUTH_URL is now read from env; POST /api/auth/session with invalid session_id correctly returns 401 with sanitized body (no traceback) — proving the env-loaded URL is called. Backend logs contain no import errors. (FIX 3) GET /api/progress runs a single Mongo range query: seeded 5 meals across 3 dates in the last 7 days, response completed in <500ms, days array has exactly 7 chronologically-ordered entries ending today, seeded-date calorie sums match (today:800, -2d:450, -5d:850), non-seeded days are 0, and both top-level target and every per-day target equal profile.daily_calories. (FIX 4) DELETE /api/auth/account seeded with profile+3 meals+mealplan+2 sessions → 200 {deleted:true}; all 5 collections (users, profiles, meals, mealplans, user_sessions) return 0 docs for that user_id; subsequent GET /api/auth/me with the same token returns 401. Regression smoke: 401 on all 6 protected GETs + protected DELETE /auth/account without token; happy path (profile→meal→summary→progress→delete) works; user-B cannot delete user-A meal (403); 8MB payload cap on /meals/scan enforced (413); rate limit still enforced on /meals/scan.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_deploy_fixes.py",
+    "/app/test_reports/pytest/iter6_results.xml"
+  ],
+  "action_items": [
+    "None — all deployment-readiness fixes verified. App is ready for deployment.",
+    "OPTIONAL: consider adding an index on meals.date if daily aggregation grows; currently the compound (user_id, date desc) index at server.py:780 already covers the range query."
+  ],
+  "critical_code_review_comments": [
+    "server.py:31-34 — EMERGENT_AUTH_URL is now correctly loaded via os.environ.get with a safe default; 401 path verified against invalid session_id.",
+    "server.py:357-366 — DELETE /api/auth/account order is correct: meals→mealplans→profiles→user_sessions→users. Deleting sessions last means the current session survives until the very end, which is intentional (auth dep already resolved uid). No race with in-flight requests observed.",
+    "server.py:530-555 — /progress uses ONE find() with $gte on date + projection (_id excluded, only date/calories/protein_g). Aggregation in Python is O(N) over meals in window, well under 500ms even at 5000 doc cap.",
+    "server.py:534-535 — /progress returns target=2000 default when no profile exists; tests confirm target=daily_calories when profile present.",
+    "server.py:554 — Each per-day entry includes target, in addition to the top-level target field. Frontend can rely on either.",
+    "backend/.env:4 & frontend/.env:5 — both env files well-formed; no unquoted values, no comments (per .env constraints)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6_deploy_fixes.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% — 11/11 pytest cases passed (env x2, emergent-auth-url x2, progress-aggregation x1, delete-account x1, regression x5)",
+    "frontend": "not tested — request scoped to backend only"
+  },
+  "seed_data_creation": "Tests directly seed users, sessions, profiles, meals, mealplans via pymongo (TEST_ prefixed emails/names) and clean up in fixtures/teardown. No residual test data after run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 6 GREEN. Reusable pytest suite at /app/backend/tests/test_iter6_deploy_fixes.py extends the iter5 pattern with _mk_session()/_cleanup() helpers. FIX 3 progress test asserts <500ms wall time — if network jitter causes flake, bump threshold to 800ms. FIX 4 test intentionally seeds 2 sessions to prove multi-session wipe. Note: DELETE /api/auth/account has NO rate limit; consider adding a small limit (e.g., 5/hour) if abuse becomes a concern — not blocking for App Store review.",
+  "rca_of_issue": "n/a — no defects found. All 4 deployment fixes verified on first run and regression smoke green."
+}

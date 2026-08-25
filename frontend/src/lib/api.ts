@@ -53,6 +53,7 @@ export const api = {
     req('/auth/session', { method: 'POST', body: JSON.stringify({ session_id }), auth: false }),
   me: () => req('/auth/me'),
   logout: () => req('/auth/logout', { method: 'POST' }),
+  deleteAccount: () => req('/auth/account', { method: 'DELETE' }),
 
   // Profile (derived from auth)
   createProfile: (data: any) => req('/profile', { method: 'POST', body: JSON.stringify(data) }),

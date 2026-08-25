@@ -28,7 +28,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
-EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+EMERGENT_AUTH_URL = os.environ["EMERGENT_AUTH_URL"]
 
 # Payload guard: 8 MB base64 (~= 6 MB decoded) is more than enough for a phone photo
 MAX_SCAN_B64_LEN = 8 * 1024 * 1024
@@ -351,6 +351,18 @@ async def auth_logout(authorization: Optional[str] = Header(default=None)):
     return {"ok": True}
 
 
+@api_router.delete("/auth/account")
+async def auth_delete_account(user: dict = Depends(get_current_user)):
+    """GDPR / Apple Store — permanently delete the current user's account and ALL their data."""
+    uid = user["user_id"]
+    await db.meals.delete_many({"user_id": uid})
+    await db.mealplans.delete_many({"user_id": uid})
+    await db.profiles.delete_many({"user_id": uid})
+    await db.user_sessions.delete_many({"user_id": uid})
+    await db.users.delete_one({"user_id": uid})
+    return {"deleted": True}
+
+
 # ---------- Profile routes (require auth) ----------
 @api_router.post("/profile", response_model=Profile)
 async def create_profile(payload: ProfileCreate, user: dict = Depends(get_current_user)):
@@ -515,18 +527,28 @@ async def delete_meal(meal_id: str, user: dict = Depends(get_current_user)):
 @api_router.get("/progress")
 async def get_progress(days: int = 7, user: dict = Depends(get_current_user)):
     uid = user["user_id"]
-    days = max(1, min(int(days), 90))  # bound the loop
+    days = max(1, min(int(days), 90))
     profile = await db.profiles.find_one({"user_id": uid}, {"_id": 0})
     target = profile.get("daily_calories", 2000) if profile else 2000
     today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days - 1)
+    start_iso = start.strftime("%Y-%m-%d")
+    # Single query for the entire range; aggregate in memory
+    docs = await db.meals.find(
+        {"user_id": uid, "date": {"$gte": start_iso}},
+        {"_id": 0, "date": 1, "calories": 1, "protein_g": 1},
+    ).to_list(5000)
+    buckets: dict = {}
+    for d in docs:
+        b = buckets.setdefault(d["date"], {"calories": 0, "protein_g": 0.0})
+        b["calories"] += int(d.get("calories", 0))
+        b["protein_g"] += float(d.get("protein_g", 0))
     result = []
     for i in range(days - 1, -1, -1):
         d = today - timedelta(days=i)
         ds = d.strftime("%Y-%m-%d")
-        docs = await db.meals.find({"user_id": uid, "date": ds}, {"_id": 0}).to_list(500)
-        cals = sum(int(x.get("calories", 0)) for x in docs)
-        prot = sum(float(x.get("protein_g", 0)) for x in docs)
-        result.append({"date": ds, "calories": cals, "protein_g": prot, "target": target})
+        b = buckets.get(ds, {"calories": 0, "protein_g": 0.0})
+        result.append({"date": ds, "calories": b["calories"], "protein_g": b["protein_g"], "target": target})
     return {"days": result, "target": target}
 
 
