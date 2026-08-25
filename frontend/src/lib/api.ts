@@ -25,9 +25,9 @@ export const api = {
     req(`/meals/summary?user_id=${user_id}${date ? `&date=${date}` : ''}`),
   deleteMeal: (id: string) => req(`/meals/${id}`, { method: 'DELETE' }),
   progress: (user_id: string, days = 7) => req(`/progress?user_id=${user_id}&days=${days}`),
-  generateMealPlan: (user_id: string) =>
-    req('/mealplan/generate', { method: 'POST', body: JSON.stringify({ user_id }) }),
-  getMealPlan: (user_id: string) => req(`/mealplan/${user_id}`),
+  generateMealPlan: (user_id: string, force = false) =>
+    req('/mealplan/generate', { method: 'POST', body: JSON.stringify({ user_id, force }) }),
+  getMealPlan: (user_id: string) => req(`/mealplan/${user_id}?auto_refresh=true`),
 };
 
 export const COLORS = {

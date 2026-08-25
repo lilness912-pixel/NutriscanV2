@@ -31,6 +31,7 @@ export default function PlanScreen() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [dayIdx, setDayIdx] = useState(0);
+  const [refreshedBanner, setRefreshedBanner] = useState(false);
 
   const load = useCallback(async () => {
     const uid = await storage.getUserId();
@@ -38,6 +39,10 @@ export default function PlanScreen() {
     try {
       const p = await api.getMealPlan(uid);
       setPlan(p);
+      if (p?.auto_refreshed) {
+        setRefreshedBanner(true);
+        setTimeout(() => setRefreshedBanner(false), 6000);
+      }
     } catch (_) {
       setPlan(null);
     } finally {
@@ -47,12 +52,12 @@ export default function PlanScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const generate = async () => {
+  const generate = async (force = false) => {
     const uid = await storage.getUserId();
     if (!uid) return;
     setGenerating(true);
     try {
-      const p = await api.generateMealPlan(uid);
+      const p = await api.generateMealPlan(uid, force);
       setPlan(p);
       setDayIdx(0);
     } catch (e) {
@@ -82,9 +87,24 @@ export default function PlanScreen() {
         <View style={styles.header}>
           <Text style={styles.eyebrow}>🍳 Ton coach IA</Text>
           <Text style={styles.title}>Plan repas</Text>
-          <Text style={styles.subtitle}>Personnalisé selon ton profil et tes objectifs</Text>
+          {plan?.week_start ? (
+            <Text style={styles.subtitle}>
+              Semaine du {new Date(plan.week_start).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })} · renouvelé chaque lundi
+            </Text>
+          ) : (
+            <Text style={styles.subtitle}>Personnalisé selon ton profil et tes objectifs</Text>
+          )}
         </View>
       </FadeInUp>
+
+      {refreshedBanner && (
+        <FadeInUp delay={0}>
+          <View style={styles.refreshBanner} testID="plan-refreshed-banner">
+            <Ionicons name="sparkles" size={14} color={COLORS.brandPrimary} />
+            <Text style={styles.refreshBannerText}>Nouveau plan généré pour cette semaine ✨</Text>
+          </View>
+        </FadeInUp>
+      )}
 
       {plan?.days?.length ? (
         <>
@@ -172,7 +192,7 @@ export default function PlanScreen() {
             <FadeInUp delay={520}>
               <BouncyPressable
                 testID="plan-regenerate"
-                onPress={generate}
+                onPress={() => generate(true)}
                 disabled={generating}
                 hapticStyle="medium"
                 style={styles.regenBtn}
@@ -213,11 +233,11 @@ export default function PlanScreen() {
               </View>
               <Text style={styles.emptyTitle}>Ton plan sur-mesure</Text>
               <Text style={styles.emptyText}>
-                Un menu de 7 jours généré par IA, ajusté à tes objectifs et macros — prêt en 20 secondes.
+                Un menu de 7 jours généré par IA, ajusté à tes macros et à la saison — et renouvelé automatiquement chaque lundi.
               </Text>
               <BouncyPressable
                 testID="plan-generate-button"
-                onPress={generate}
+                onPress={() => generate(false)}
                 disabled={generating}
                 hapticStyle="medium"
                 style={styles.genCta}
@@ -258,6 +278,12 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 12, color: COLORS.brandPrimary, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   title: { fontSize: 30, fontWeight: '800', color: COLORS.text, letterSpacing: -0.5, marginTop: 4 },
   subtitle: { fontSize: 14, color: COLORS.textMuted, marginTop: 4 },
+
+  refreshBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 8,
+    backgroundColor: COLORS.brandSecondary, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
+  },
+  refreshBannerText: { fontSize: 12, color: COLORS.brandPrimary, fontWeight: '700' },
 
   daysRow: { paddingHorizontal: 16, gap: 8, alignItems: 'center', height: 60 },
   dayChip: {
