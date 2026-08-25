@@ -32,10 +32,12 @@ export default function PlanScreen() {
   const [generating, setGenerating] = useState(false);
   const [dayIdx, setDayIdx] = useState(0);
   const [refreshedBanner, setRefreshedBanner] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const uid = await storage.getUserId();
     if (!uid) return;
+    setLoading(true);
     try {
       const p = await api.getMealPlan(uid);
       setPlan(p);
@@ -43,8 +45,40 @@ export default function PlanScreen() {
         setRefreshedBanner(true);
         setTimeout(() => setRefreshedBanner(false), 6000);
       }
-    } catch (_) {
-      setPlan(null);
+    } catch (e: any) {
+      // 404 = pas encore de plan → afficher l'empty state immédiatement
+      if (typeof e?.message === 'string' && e.message.startsWith('404:')) {
+        setPlan(null);
+        setLoading(false);
+        return;
+      }
+      // Ingress may return 502 on the first stale-week auto_refresh call because
+      // Gemini takes 60-120s. Poll the non-refreshing GET until the fresh plan
+      // lands (server keeps generating in the background) — up to 2 min.
+      const uid2 = await storage.getUserId();
+      if (!uid2) { setLoading(false); return; }
+      const before = Date.now();
+      let found: any = null;
+      const startedIso = new Date(before).toISOString();
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const p2 = await api.getMealPlanNoRefresh(uid2);
+          if (p2 && p2.week_start === currentMondayIso() && (!p2.created_at || p2.created_at > startedIso)) {
+            found = p2;
+            break;
+          }
+        } catch (_) {
+          /* still generating or 404 */
+        }
+      }
+      if (found) {
+        setPlan(found);
+        setRefreshedBanner(true);
+        setTimeout(() => setRefreshedBanner(false), 6000);
+      } else {
+        setPlan(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -56,21 +90,63 @@ export default function PlanScreen() {
     const uid = await storage.getUserId();
     if (!uid) return;
     setGenerating(true);
+    setErrorMsg(null);
+    const startedIso = new Date().toISOString();
     try {
       const p = await api.generateMealPlan(uid, force);
       setPlan(p);
       setDayIdx(0);
-    } catch (e) {
-      console.error(e);
+    } catch (_) {
+      // Ingress 502 at ~60s. The backend keeps working. Poll for the finished plan.
+      let found: any = null;
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const p2 = await api.getMealPlanNoRefresh(uid);
+          if (p2 && p2.week_start === currentMondayIso() && (!p2.created_at || p2.created_at > startedIso)) {
+            found = p2;
+            break;
+          }
+        } catch (_e) {
+          /* still generating */
+        }
+      }
+      if (found) {
+        setPlan(found);
+        setDayIdx(0);
+        setRefreshedBanner(true);
+        setTimeout(() => setRefreshedBanner(false), 6000);
+      } else {
+        setErrorMsg("L'IA n'a pas pu générer le plan. Réessaie dans un instant.");
+        setTimeout(() => setErrorMsg(null), 6000);
+      }
     } finally {
       setGenerating(false);
     }
   };
 
-  if (loading) {
+  function currentMondayIso() {
+    const d = new Date();
+    const day = d.getUTCDay(); // 0 = Sunday
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setUTCDate(d.getUTCDate() + diff);
+    return d.toISOString().slice(0, 10);
+  }
+
+  if (loading || generating) {
     return (
-      <SafeAreaView style={styles.center}>
-        <ActivityIndicator color={COLORS.brandPrimary} />
+      <SafeAreaView style={styles.center} testID="plan-loading">
+        <View style={styles.loadingCard}>
+          <ActivityIndicator color={COLORS.brandPrimary} size="large" />
+          <Text style={styles.loadingTitle}>
+            {generating ? "L'IA prépare ta semaine…" : 'Chargement de ton plan'}
+          </Text>
+          <Text style={styles.loadingText}>
+            {generating
+              ? '28 repas équilibrés, variés et de saison. Ça prend environ 1 à 2 minutes.'
+              : "Si c'est une nouvelle semaine, l'IA prépare un menu tout frais (~1 à 2 min)."}
+          </Text>
+        </View>
       </SafeAreaView>
     );
   }
@@ -102,6 +178,15 @@ export default function PlanScreen() {
           <View style={styles.refreshBanner} testID="plan-refreshed-banner">
             <Ionicons name="sparkles" size={14} color={COLORS.brandPrimary} />
             <Text style={styles.refreshBannerText}>Nouveau plan généré pour cette semaine ✨</Text>
+          </View>
+        </FadeInUp>
+      )}
+
+      {errorMsg && (
+        <FadeInUp delay={0}>
+          <View style={styles.errorBanner} testID="plan-error-banner">
+            <Ionicons name="alert-circle" size={14} color={COLORS.error} />
+            <Text style={styles.errorBannerText}>{errorMsg}</Text>
           </View>
         </FadeInUp>
       )}
@@ -284,6 +369,16 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.brandSecondary, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
   },
   refreshBannerText: { fontSize: 12, color: COLORS.brandPrimary, fontWeight: '700' },
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 8,
+    backgroundColor: '#FFE9E7', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
+  },
+  errorBannerText: { fontSize: 12, color: COLORS.error, fontWeight: '700', flex: 1 },
+  loadingCard: {
+    alignItems: 'center', paddingHorizontal: 40, gap: 12,
+  },
+  loadingTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text, marginTop: 8 },
+  loadingText: { fontSize: 13, color: COLORS.textMuted, textAlign: 'center', lineHeight: 18 },
 
   daysRow: { paddingHorizontal: 16, gap: 8, alignItems: 'center', height: 60 },
   dayChip: {

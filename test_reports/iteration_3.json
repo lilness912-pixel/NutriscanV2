@@ -1,0 +1,69 @@
+{
+  "summary": "Iteration 3 verified the frontend polling fallback fix for the Cloudflare 60s ingress timeout on Gemini 3.1 Pro plan generation. Backend smoke: 7/7 pytest passed (~67s), confirming iteration-2 endpoint contract still holds. Frontend Generate flow: tapping 'Générer mon plan' shows the correct plan-loading UI with title 'L'IA prépare ta semaine…' and helper '28 repas équilibrés, variés et de saison. Ça prend environ 1 à 2 minutes.' from t=0 through completion; NO red error banner appeared during the full 85s wait; plan landed (7 day chips + 4 meal cards for Lundi, week label 'Semaine du 24 août · renouvelé chaque lundi', real seasonal dishes 'Porridge Aux Pêches Et Myrtilles' / 'Salade De Pâtes Au Thon Et Feta'). The polling fallback in api.ts (55s timeout) + plan.tsx generate() catch loop works as designed. HOWEVER a UX regression was introduced in load(): for a fresh user with NO stored plan, GET /mealplan/{uid}?auto_refresh=true returns 404 in <1s and the catch block then polls getMealPlanNoRefresh 24 times over 2 min (all 404s) before finally falling back to the empty state. The user sees 'Chargement de ton plan' for the full 2 minutes when the correct behaviour would be to show the 'Générer mon plan' empty state immediately. Also, refreshedBanner is set only in load()'s polling success, not in generate()'s polling success — minor inconsistency vs the spec.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/mealplan/generate (fresh generation, force=true)",
+        "issue": "Cloudflare ingress can still 502 at 60s when Gemini takes >60s. On this run generation completed in ~85s and the fetch (with 55s abort) failed as expected — polling fallback caught the plan. Behavior unchanged from iter 2; the frontend fix now masks this properly. Backend-side option (async task + 202/poll) still worth considering long-term."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "app/(tabs)/plan.tsx :: load()",
+        "issue": "For a NEW user (no plan in DB), useFocusEffect -> load() -> api.getMealPlan(uid, auto_refresh=true) returns 404 in <1s; the catch block then polls getMealPlanNoRefresh 24×5s = 2 min (all 404) before setting plan=null and finally showing the empty state. Users have to stare at 'Chargement de ton plan' for 2 minutes before they can tap 'Générer mon plan'. Fix: distinguish 404 (no plan yet) from network/timeout errors — 404 should immediately transition to empty state without polling. Detect via `error.message?.startsWith('404:')` and short-circuit the polling loop. Reference: /app/frontend/app/(tabs)/plan.tsx:48-78 and /app/frontend/src/lib/api.ts:13-16.",
+        "testID": "plan-loading",
+        "priority": "HIGH"
+      },
+      {
+        "component": "app/(tabs)/plan.tsx :: generate()",
+        "issue": "When generate()'s polling branch successfully retrieves the fresh plan (line 108-110), the refreshedBanner ('Nouveau plan généré pour cette semaine ✨') is NOT shown. Spec: 'The refreshedBanner should be visible for 6s' after a fresh plan arrives. Only load()'s catch branch (lines 69-72) sets refreshedBanner=true after polling. Consider adding setRefreshedBanner(true) + setTimeout in generate()'s polling success block. Reference: /app/frontend/app/(tabs)/plan.tsx:108-110.",
+        "testID": "plan-refreshed-banner",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "First-time user opens Plan tab (no stored plan)",
+        "issue": "The current load() polling fallback misinterprets a legitimate 404 (no plan exists) as 'server still generating' — leading to a 2-minute wait before the empty CTA appears. Root cause: catch block doesn't inspect error status; treats every failure as a Cloudflare timeout.",
+        "affected_testIDs": ["plan-loading", "plan-generate-button"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_smoke.py",
+    "/app/test_reports/pytest/iter3_smoke.xml"
+  ],
+  "action_items": [
+    "In plan.tsx load(), inspect the caught error and skip the polling loop when the status is 404 (no plan exists). Only poll when the error is AbortError (fetch 55s timeout) or a 5xx/network error. Suggested check: if (String(err?.message || '').startsWith('404:')) { setPlan(null); setLoading(false); return; }",
+    "In plan.tsx generate() polling success branch (line 108-110), mirror load()'s behaviour: setRefreshedBanner(true); setTimeout(() => setRefreshedBanner(false), 6000). This is required by the iteration-3 spec (green banner for 6s).",
+    "Verified: no red error banner shown during ~85s generation. Polling fallback + loading UI copy match the spec exactly.",
+    "STALE-WEEK auto refresh path could not be tested end-to-end (no way to age the stored plan without direct DB access). Behavior is unchanged from iter 2 and covered by code review.",
+    "OPTIONAL: consider migrating POST /mealplan/generate to a background task pattern (return 202 + poll a job id). This would eliminate the 55s abort + 2-min poll dance on the client entirely."
+  ],
+  "critical_code_review_comments": [
+    "api.ts req() throws a generic Error whose message is `${status}: ${body}` — usable but the load() catch cannot easily discriminate error classes. Consider throwing a typed error (e.g. class ApiError { status: number }) so callers can filter 404 vs 5xx vs AbortError cleanly.",
+    "plan.tsx duplicates the polling loop in load() and generate() (same 24×5s / currentMondayIso / created_at > startedIso logic). Extract into a reusable hook `usePollForFreshPlan(uid, startedIso)` returning `{plan, done}`.",
+    "The `plan-loading` state renders on BOTH `loading` and `generating` — that is correct per spec, but the copy branches on `generating`. Result: during load()'s polling loop the user sees 'Chargement de ton plan' (not 'L'IA prépare…'). Copy is acceptable but could be improved to say 'Chargement… (peut prendre jusqu'à 2 min si nouvelle semaine)' during the load polling.",
+    "startedIso is computed BEFORE the fetch call in generate() — good. In load() it is inside catch (before polling) which means fresh plans created just before the polling loop entry would still qualify because they land after `before = Date.now()`. Logic is correct.",
+    "currentMondayIso() uses getUTCDay/getUTCDate — matches backend current_monday_iso() (also UTC). Consistent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_smoke.py (new, 7 tests, all pass)",
+    "/app/test_reports/iteration_3.json (new)",
+    "/app/test_reports/pytest/iter3_smoke.xml (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (7/7 smoke tests passed in 67s)",
+    "frontend": "80% — Generate button flow: loading copy, no error banner, plan render, week label, day chips, meal cards ALL verified ✅. Two frontend regressions found: (1) fresh-user load() polls for 2 min before showing empty state (HIGH), (2) refreshedBanner missing after generate() polling success (MEDIUM)."
+  },
+  "seed_data_creation": "Two TEST_ profiles created via POST /api/profile: TEST_Iter3 (uid returned in-fixture, used for smoke) and TEST_FE 1765427e-59d5-4b82-a076-de04510039e4 (used for the frontend E2E flow, now has a valid current-week Gemini 3.1 Pro plan stored).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend endpoint contract from iter 2 still holds (verified via /app/backend/tests/test_iter3_smoke.py). The polling fallback in plan.tsx works CORRECTLY on the Generate button path (no red banner, correct 'L'IA prépare ta semaine…' copy, plan lands after ~60-120s). BUT there is a UX bug in the auto-load path: when a user with no plan opens the Plan tab, load()'s catch block polls for 2 min before showing empty state — because GET /mealplan?auto_refresh=true returns 404 fast and the catch cannot distinguish 404 from a Cloudflare timeout. Main agent should filter the error status in load() before entering the polling loop. Frontend user for reproduction: uid=1765427e-59d5-4b82-a076-de04510039e4 already has a current-week plan; to reproduce the fresh-user bug, POST /api/profile to create a new uid and seed it into localStorage.nutriscan_user_id, then open /plan. Base URL: https://health-meal-planner-12.preview.emergentagent.com. Server logs are healthy; no supervisor restarts needed.",
+  "rca_of_issue": "ROOT CAUSE (fresh-user 2-min stuck-loading): plan.tsx `load()` uses a naive `try { getMealPlan(auto_refresh=true) } catch { poll 24×5s }` pattern that does not inspect the error. When the user has no plan in DB, GET returns 404 in <1s → the catch triggers a 2-minute polling loop against `getMealPlanNoRefresh` which will keep returning 404 (nothing is generating server-side, since GET auto_refresh=true on 404 raises HTTPException(404) immediately in backend/server.py:538-539 without kicking off any regeneration). Only after 24 iterations does the code set plan=null and reveal the empty state. Fix (minimal): in plan.tsx line 48 add `if (String(e?.message||'').startsWith('404:')) { setPlan(null); setLoading(false); return; }` before entering the polling loop. Reproduction: (1) POST /api/profile → new uid; (2) seed localStorage.nutriscan_user_id = uid; (3) open /plan; (4) observe 'Chargement de ton plan' for ~2 min before empty state appears. Expected: empty state within 1s. Confirmed via browser automation this test iteration."
+}

@@ -1,0 +1,67 @@
+{
+  "summary": "Iteration 2 focused testing of new meal plan features (week_start, generation_meta, seasonal ingredients, auto_refresh, force flag) + cache invalidation + meal scan + regressions. Backend: 9/9 pytest passed (1 skipped by design). Frontend Plan screen renders with 'Semaine du 24 août · renouvelé chaque lundi', 7 day chips, 4 meal cards per day, all with real seasonal French dishes (thon, framboises, courgettes, feta, maïs, quinoa, poivrons). CRITICAL infra issue: Cloudflare ingress times out at 60s while Gemini 3.1 Pro plan generation takes 60-120s -> POST /api/mealplan/generate returns 502 to the HTTP client even though the plan is successfully generated and stored in Mongo. Users of the mobile app will always see a 'Bad gateway' on first-time plan generation despite the plan being ready if they retry a GET.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/mealplan/generate (fresh generation, force=true or first call)",
+        "issue": "Ingress (Cloudflare) returns 502 Bad Gateway after 60s while Gemini 3.1 Pro takes 60-120s to answer. The backend still completes and stores the plan in MongoDB, but the client sees a 502. On mobile, users tapping 'Générer mon plan' will see the error banner even though a plan was actually created. Repro: POST /api/mealplan/generate with force=true for a fresh user -> 502 at ~60s; poll GET /api/mealplan/{uid}?auto_refresh=false ~30-60s later -> 200 with a valid plan.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/mealplan/{uid}?auto_refresh=true (when stale)",
+        "issue": "Same 60s ingress limit will also 502 when a stale plan needs regeneration. Fallback stale plan is returned server-side, but only after the model call resolves; client sees 502. Not directly tested (couldn't age plan without DB access), noted from code review of _generate_and_store_plan."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "app/(tabs)/plan.tsx",
+        "issue": "'Générer mon plan' button will always trigger the error banner on a first-time user because of the backend 502 (ingress timeout). Consider polling GET /api/mealplan on failure or optimistic UX (kick off, then poll every 10s for up to 2 min).",
+        "testID": "plan-generate-button",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "First-time plan generation via mobile UI",
+        "issue": "Frontend calls api.generateMealPlan(uid, false) which POSTs to /api/mealplan/generate; ingress times out at 60s -> user sees red error banner 'L'IA n'a pas pu générer le plan' even though the plan lands in DB. Reloading the tab then shows the plan.",
+        "affected_testIDs": ["plan-generate-button", "plan-error-banner", "plan-regenerate"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/pytest/iter2_results.xml"
+  ],
+  "action_items": [
+    "URGENT: Handle the 60s ingress timeout in plan.tsx. Recommended: after POST /mealplan/generate fails or times out, poll GET /api/mealplan/{uid}?auto_refresh=false every 10s for up to 3 min before showing the error banner. Alternative: switch to a background job pattern (return 202 + poll) or a faster model for the first cut.",
+    "Optional: add a note in the empty-state that generation takes ~1-2 min, so users don't panic when the button seems stuck (already partly done in the loading card copy).",
+    "Optional: on GET /api/mealplan when auto_refresh=true triggers regeneration, wrap the LLM call in an async task and return the stale plan immediately with a 'refresh_in_progress' flag, avoiding the ingress timeout."
+  ],
+  "critical_code_review_comments": [
+    "server.py::_generate_and_store_plan correctly writes week_start = Monday ISO, generation_meta.model, .days_on_target, .season. Normalization ensures 7 days in fixed order and defensive coercion of macros. Good.",
+    "PUT /api/profile/{uid} now calls db.mealplans.delete_many({user_id}) -> cache invalidation verified in tests.",
+    "POST /api/mealplan/generate honors force flag and short-circuits with existing plan if week_start == current Monday -> cache-hit path measured at <0.3s.",
+    "Season detection based on UTC month is correct (aug 2026 -> 'été'). Seasonal keyword list is comprehensive and prompt anchors 60% of plant ingredients on it. Real output on 2026-08-24 plan contained 18/21 tested summer keywords across the week.",
+    "extract_json + ask_llm_json retry logic is solid, but has no server-side timeout guard; consider asyncio.wait_for around chat.send_message to bail out at 55s and return 504 with a helpful message before the ingress cuts the connection.",
+    "GET /mealplan does not enforce a max age or a 'stale-while-revalidate' pattern, so auto_refresh path is exposed to the same 60s ingress limit on stale weeks."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py (new, 10 tests, 9 passing 1 skipped)",
+    "/app/test_reports/iteration_2.json (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 executed pytest tests passed, 1 skipped by design). Note: initial POST /mealplan/generate reliably 502s from client due to ingress -> tests now poll GET to verify the persisted plan.",
+    "frontend": "100% for tested Plan screen flow (Semaine du label, day chips, meal cards, day switching, macros display all render correctly with real AI-generated seasonal French dishes)."
+  },
+  "seed_data_creation": "Two TEST_ profiles created via POST /api/profile (TEST_Iter2, TEST_gen) and one meal plan generated + persisted for user 01a81394-b8a3-48a6-a3d8-a19ba5f06d21 (week 2026-08-24, model=gemini-3.1-pro-preview, season=été, days_on_target=7/7, 18 summer keywords across the week).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Base URL: https://health-meal-planner-12.preview.emergentagent.com/api. Pytest suite at /app/backend/tests/test_iteration2.py. When testing plan generation, DO NOT expect POST /mealplan/generate (force=true) to return 200 within 60s — the Cloudflare ingress times out and returns 502. Instead, fire-and-forget the POST then poll GET /api/mealplan/{uid}?auto_refresh=false every ~5-10s for up to 3 min. All cache paths (GET auto_refresh=true when current, POST force=false with existing plan) reliably return in <1s. PUT /profile deletes any cached plan (verified). Seasonal keywords hit rate for 'été' plan: 18/21 tested keywords. Frontend: seed localStorage.nutriscan_user_id then load /(tabs)/plan to bypass onboarding.",
+  "rca_of_issue": "ROOT CAUSE (CRITICAL): Cloudflare ingress in front of the Kubernetes preview environment enforces a ~60s upstream response timeout. Gemini 3.1 Pro takes 60-120s to answer the 7-day meal plan prompt (measured 60-90s per LiteLLM log, with retries pushing to 150s). Result: POST /api/mealplan/generate returns HTTP 502 to the client even when the backend eventually finishes and inserts the plan into MongoDB. Reproduction: (1) POST /api/profile -> uid; (2) POST /api/mealplan/generate {user_id: uid, force: true} -> 502 in ~60s; (3) wait 30-60s; (4) GET /api/mealplan/{uid}?auto_refresh=false -> 200 with a valid plan. Mitigations (in order of preference): (a) Frontend polls GET on POST failure/timeout for up to 3 min before showing the error banner; (b) Backend converts /mealplan/generate to a background task pattern (accept + 202 + poll); (c) Reduce model latency (Gemini 3 Flash or streaming); (d) Raise ingress timeout (infra-side, likely not possible on shared preview). The cache-hit paths (force=false, auto_refresh=true on current week) are unaffected and fast."
+}

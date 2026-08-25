@@ -220,10 +220,12 @@ async def get_profile(user_id: str):
 async def update_profile(user_id: str, payload: ProfileCreate):
     targets = compute_targets(payload)
     update = {**payload.model_dump(), **targets}
-    await db.profiles.update_one({"id": user_id}, {"$set": update})
-    doc = await db.profiles.find_one({"id": user_id}, {"_id": 0})
-    if not doc:
+    result = await db.profiles.update_one({"id": user_id}, {"$set": update})
+    if result.matched_count == 0:
         raise HTTPException(404, "Profile not found")
+    # Invalidate cached meal plan since macros/goal changed
+    await db.mealplans.delete_many({"user_id": user_id})
+    doc = await db.profiles.find_one({"id": user_id}, {"_id": 0})
     return Profile(**doc)
 
 
@@ -371,6 +373,55 @@ async def _generate_and_store_plan(user_id: str, profile: dict) -> dict:
                6: "été", 7: "été", 8: "été", 9: "automne", 10: "automne", 11: "automne"}
     season = seasons[month]
 
+    # Explicit list of seasonal produce (hémisphère nord / France) — the AI must
+    # anchor at least 60% of its plant ingredients in this list.
+    seasonal_map = {
+        "hiver": {
+            "légumes": ["poireau", "chou frisé", "chou-fleur", "chou de Bruxelles", "endive", "carotte",
+                        "panais", "topinambour", "courge butternut", "potiron", "épinard", "mâche",
+                        "betterave", "céleri-rave", "navet", "salsifis", "champignon de Paris"],
+            "fruits": ["orange", "clémentine", "pomelo", "kiwi", "pomme", "poire", "banane",
+                       "grenade", "kaki", "fruit de la passion", "citron"],
+            "protéines": ["saumon", "cabillaud", "sardine", "poulet", "dinde", "œuf", "lentille",
+                          "haricot rouge", "pois chiche", "tofu", "gruyère"],
+        },
+        "printemps": {
+            "légumes": ["asperge", "artichaut", "petit pois", "radis", "épinard", "fève", "carotte nouvelle",
+                        "oignon nouveau", "salade", "roquette", "courgette", "concombre", "navet nouveau",
+                        "chou-rave"],
+            "fruits": ["fraise", "rhubarbe", "cerise", "pomme", "kiwi", "citron", "banane", "abricot"],
+            "protéines": ["cabillaud", "truite", "poulet", "agneau", "œuf", "chèvre frais", "tofu",
+                          "lentille corail"],
+        },
+        "été": {
+            "légumes": ["tomate", "courgette", "aubergine", "poivron", "concombre", "haricot vert",
+                        "maïs doux", "salade", "roquette", "radis", "brocoli", "artichaut", "avocat",
+                        "fenouil", "oignon rouge"],
+            "fruits": ["pêche", "nectarine", "abricot", "melon", "pastèque", "cerise", "fraise",
+                       "framboise", "myrtille", "prune", "figue", "citron"],
+            "protéines": ["thon", "maquereau", "sardine", "poulet", "crevette", "œuf", "mozzarella",
+                          "feta", "pois chiche", "haricot blanc", "tofu"],
+        },
+        "automne": {
+            "légumes": ["courge butternut", "potiron", "champignon de Paris", "cèpes", "chou",
+                        "chou-fleur", "carotte", "poireau", "brocoli", "épinard", "betterave",
+                        "topinambour", "panais", "céleri", "endive"],
+            "fruits": ["pomme", "poire", "raisin", "coing", "figue", "prune", "noix", "noisette",
+                       "châtaigne", "kiwi", "citron"],
+            "protéines": ["saumon", "canard", "poulet", "dinde", "œuf", "lentille", "haricot",
+                          "champignon", "tofu", "comté"],
+        },
+    }
+    sp = seasonal_map[season]
+    seasonal_hint = (
+        f"Produits de saison ({season}) à privilégier :\n"
+        f"- Légumes : {', '.join(sp['légumes'])}\n"
+        f"- Fruits : {', '.join(sp['fruits'])}\n"
+        f"- Protéines : {', '.join(sp['protéines'])}\n"
+        "Au moins 60% des ingrédients végétaux du plan doivent provenir de cette liste. "
+        "Bannis les produits totalement hors-saison (fraises en hiver, courge en été, etc.)."
+    )
+
     system_prompt = (
         "Tu es un(e) nutritionniste diplômé(e) et chef cuisinier(e). Ta mission : générer un plan repas "
         "hebdomadaire personnalisé, réaliste, VARIÉ, savoureux et facile à préparer, avec des macros "
@@ -403,10 +454,10 @@ async def _generate_and_store_plan(user_id: str, profile: dict) -> dict:
         f"Profil : {profile['age']} ans, {profile['gender']}, {profile['height_cm']} cm, {profile['weight_kg']} kg, "
         f"activité {profile['activity']}, objectif {profile['goal']}.\n"
         f"Objectifs quotidiens : {profile['daily_calories']} kcal, {profile['protein_g']} g protéines, "
-        f"{profile['carbs_g']} g glucides, {profile['fat_g']} g lipides.\n"
-        f"Saison actuelle : {season} — privilégie les produits de saison.\n"
+        f"{profile['carbs_g']} g glucides, {profile['fat_g']} g lipides.\n\n"
+        f"{seasonal_hint}\n\n"
         f"Semaine du {week_start} (utilise cette date comme graine de variation pour proposer un menu différent des semaines précédentes).\n"
-        "Génère un plan complet, gourmand et équilibré maintenant."
+        "Génère un plan complet, gourmand, équilibré et RIGOUREUSEMENT DE SAISON maintenant."
     )
 
     try:

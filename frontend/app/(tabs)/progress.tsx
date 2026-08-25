@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -56,8 +56,21 @@ export default function ProgressScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const reset = async () => {
-    await storage.clear();
-    router.replace('/onboarding');
+    Alert.alert(
+      'Réinitialiser ton profil ?',
+      'Toutes tes données locales seront effacées. Tes repas restent sur le serveur.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Réinitialiser',
+          style: 'destructive',
+          onPress: async () => {
+            await storage.clear();
+            router.replace('/onboarding');
+          },
+        },
+      ]
+    );
   };
 
   if (loading) {
