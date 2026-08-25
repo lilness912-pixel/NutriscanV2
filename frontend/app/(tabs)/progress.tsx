@@ -12,7 +12,7 @@ import Animated, {
   interpolate,
 } from 'react-native-reanimated';
 import { api, COLORS } from '@/src/lib/api';
-import { storage } from '@/src/lib/storage';
+import { useAuth } from '@/src/lib/auth';
 import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 
 type DayData = { date: string; calories: number; protein_g: number; target: number };
@@ -33,16 +33,15 @@ function AnimatedBar({ heightPx, delay, color }: { heightPx: number; delay: numb
 
 export default function ProgressScreen() {
   const router = useRouter();
+  const { user, signOut } = useAuth();
   const [data, setData] = useState<DayData[]>([]);
   const [target, setTarget] = useState(2000);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const uid = await storage.getUserId();
-    if (!uid) return;
     try {
-      const [prog, p] = await Promise.all([api.progress(uid, 7), api.getProfile(uid)]);
+      const [prog, p] = await Promise.all([api.progress(7), api.getProfile()]);
       setData(prog.days);
       setTarget(prog.target);
       setProfile(p);
@@ -55,18 +54,18 @@ export default function ProgressScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const reset = async () => {
+  const doSignOut = async () => {
     Alert.alert(
-      'Réinitialiser ton profil ?',
-      'Toutes tes données locales seront effacées. Tes repas restent sur le serveur.',
+      'Se déconnecter ?',
+      'Tu pourras te reconnecter avec Google à tout moment. Tes données restent sauvegardées.',
       [
         { text: 'Annuler', style: 'cancel' },
         {
-          text: 'Réinitialiser',
+          text: 'Se déconnecter',
           style: 'destructive',
           onPress: async () => {
-            await storage.clear();
-            router.replace('/onboarding');
+            await signOut();
+            router.replace('/login');
           },
         },
       ]
@@ -198,9 +197,11 @@ export default function ProgressScreen() {
         )}
 
         <FadeInUp delay={360}>
-          <BouncyPressable onPress={reset} hapticStyle="light" style={styles.resetBtn} testID="reset-profile">
+          <BouncyPressable onPress={doSignOut} hapticStyle="light" style={styles.resetBtn} testID="signout-button">
             <Ionicons name="log-out-outline" size={18} color={COLORS.error} />
-            <Text style={{ color: COLORS.error, fontWeight: '700' }}>Réinitialiser mon profil</Text>
+            <Text style={{ color: COLORS.error, fontWeight: '700' }}>
+              Se déconnecter {user?.email ? `(${user.email})` : ''}
+            </Text>
           </BouncyPressable>
         </FadeInUp>
       </ScrollView>

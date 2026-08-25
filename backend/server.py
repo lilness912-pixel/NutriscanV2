@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,7 +10,13 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+import httpx
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.responses import JSONResponse
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
@@ -22,8 +28,28 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+
+# Payload guard: 8 MB base64 (~= 6 MB decoded) is more than enough for a phone photo
+MAX_SCAN_B64_LEN = 8 * 1024 * 1024
+
+# Per-user rate limiter (falls back to IP when no user is authenticated)
+def _rate_key(request: Request) -> str:
+    uid = getattr(request.state, "user_id", None)
+    return f"u:{uid}" if uid else f"ip:{get_remote_address(request)}"
+
+limiter = Limiter(key_func=_rate_key)
 
 app = FastAPI()
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def _rl_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please slow down."},
+    )
+
 api_router = APIRouter(prefix="/api")
 
 
@@ -55,7 +81,6 @@ class ProfileCreate(BaseModel):
 
 
 class MealScanRequest(BaseModel):
-    user_id: str
     image_base64: str
 
 
@@ -86,7 +111,6 @@ class Meal(BaseModel):
 
 
 class MealCreate(BaseModel):
-    user_id: str
     name: str
     calories: int
     protein_g: float
@@ -96,6 +120,18 @@ class MealCreate(BaseModel):
     category: Literal["breakfast", "lunch", "dinner", "snack"] = "snack"
     image_base64: Optional[str] = None
     date: Optional[str] = None
+
+
+class SessionExchangeRequest(BaseModel):
+    session_id: str
+
+
+class AuthUser(BaseModel):
+    user_id: str
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    has_profile: bool = False
 
 
 class MealPlanDay(BaseModel):
@@ -150,10 +186,41 @@ def extract_json(text: str) -> dict:
 
 def current_monday_iso() -> str:
     """Return the ISO date (YYYY-MM-DD) of Monday of the current UTC week."""
-    from datetime import timedelta
     today = datetime.now(timezone.utc).date()
     monday = today - timedelta(days=today.weekday())
     return monday.isoformat()
+
+
+# ---------- Auth dependency ----------
+async def get_current_user(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    """Resolve the Bearer session_token to a user record. Returns dict or raises 401."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization.split(None, 1)[1].strip()
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    # Normalize expires_at to timezone-aware
+    exp = session.get("expires_at")
+    if isinstance(exp, str):
+        try:
+            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+        except Exception:
+            exp_dt = None
+    else:
+        exp_dt = exp
+    if exp_dt and exp_dt.tzinfo is None:
+        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+    if not exp_dt or exp_dt < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session expired")
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    request.state.user_id = user["user_id"]
+    return user
 
 
 # Text model used for meal-plan reasoning. Vision uses same model for photos.
@@ -199,40 +266,140 @@ async def root():
     return {"message": "Nutriscan API"}
 
 
+# ---------- Auth routes ----------
+@api_router.post("/auth/session")
+async def auth_session(payload: SessionExchangeRequest):
+    """Exchange a one-time Emergent session_id for a 7-day session_token."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as hc:
+            r = await hc.get(EMERGENT_AUTH_URL, headers={"X-Session-ID": payload.session_id})
+        if r.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        data = r.json()
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Emergent auth call failed")
+        raise HTTPException(status_code=401, detail="Auth exchange failed")
+
+    email = (data.get("email") or "").lower().strip()
+    if not email:
+        raise HTTPException(status_code=401, detail="Missing email in session data")
+    session_token = data.get("session_token")
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Missing session_token in session data")
+
+    # Upsert user by email
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    now = datetime.now(timezone.utc)
+    if existing:
+        user_id = existing["user_id"]
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": data.get("name") or existing.get("name"),
+                      "picture": data.get("picture") or existing.get("picture"),
+                      "last_login_at": now.isoformat()}},
+        )
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": data.get("name"),
+            "picture": data.get("picture"),
+            "created_at": now.isoformat(),
+            "last_login_at": now.isoformat(),
+        })
+
+    expires_at = now + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "session_token": session_token,
+        "user_id": user_id,
+        "expires_at": expires_at,
+        "created_at": now,
+    })
+    has_profile = bool(await db.profiles.find_one({"user_id": user_id}, {"_id": 0}))
+    return {
+        "session_token": session_token,
+        "user": {
+            "user_id": user_id,
+            "email": email,
+            "name": data.get("name"),
+            "picture": data.get("picture"),
+            "has_profile": has_profile,
+        },
+    }
+
+
+@api_router.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    has_profile = bool(await db.profiles.find_one({"user_id": user["user_id"]}, {"_id": 0}))
+    return {
+        "user_id": user["user_id"],
+        "email": user.get("email"),
+        "name": user.get("name"),
+        "picture": user.get("picture"),
+        "has_profile": has_profile,
+    }
+
+
+@api_router.post("/auth/logout")
+async def auth_logout(authorization: Optional[str] = Header(default=None)):
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(None, 1)[1].strip()
+        await db.user_sessions.delete_one({"session_token": token})
+    return {"ok": True}
+
+
+# ---------- Profile routes (require auth) ----------
 @api_router.post("/profile", response_model=Profile)
-async def create_profile(payload: ProfileCreate):
+async def create_profile(payload: ProfileCreate, user: dict = Depends(get_current_user)):
     targets = compute_targets(payload)
+    # Upsert one profile per authenticated user
+    existing = await db.profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if existing:
+        update = {**payload.model_dump(), **targets}
+        await db.profiles.update_one({"user_id": user["user_id"]}, {"$set": update})
+        # Invalidate cached plan
+        await db.mealplans.delete_many({"user_id": user["user_id"]})
+        doc = await db.profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
+        return Profile(**doc)
     profile = Profile(**payload.model_dump(), **targets)
     doc = profile.model_dump()
+    doc["user_id"] = user["user_id"]  # link profile to authenticated user
     await db.profiles.insert_one(doc)
-    return profile
+    return Profile(**doc)
 
 
-@api_router.get("/profile/{user_id}", response_model=Profile)
-async def get_profile(user_id: str):
-    doc = await db.profiles.find_one({"id": user_id}, {"_id": 0})
+@api_router.get("/profile", response_model=Profile)
+async def get_my_profile(user: dict = Depends(get_current_user)):
+    doc = await db.profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Profile not found")
     return Profile(**doc)
 
 
-@api_router.put("/profile/{user_id}", response_model=Profile)
-async def update_profile(user_id: str, payload: ProfileCreate):
+@api_router.put("/profile", response_model=Profile)
+async def update_my_profile(payload: ProfileCreate, user: dict = Depends(get_current_user)):
     targets = compute_targets(payload)
     update = {**payload.model_dump(), **targets}
-    result = await db.profiles.update_one({"id": user_id}, {"$set": update})
+    result = await db.profiles.update_one({"user_id": user["user_id"]}, {"$set": update})
     if result.matched_count == 0:
         raise HTTPException(404, "Profile not found")
-    # Invalidate cached meal plan since macros/goal changed
-    await db.mealplans.delete_many({"user_id": user_id})
-    doc = await db.profiles.find_one({"id": user_id}, {"_id": 0})
+    await db.mealplans.delete_many({"user_id": user["user_id"]})
+    doc = await db.profiles.find_one({"user_id": user["user_id"]}, {"_id": 0})
     return Profile(**doc)
 
 
 @api_router.post("/meals/scan", response_model=MealScanResult)
-async def scan_meal(payload: MealScanRequest):
+@limiter.limit("30/hour")
+async def scan_meal(request: Request, payload: MealScanRequest, user: dict = Depends(get_current_user)):
     if not EMERGENT_LLM_KEY:
-        raise HTTPException(500, "LLM key not configured")
+        raise HTTPException(500, "AI service not configured")
+
+    # Payload size guard
+    if not payload.image_base64 or len(payload.image_base64) > MAX_SCAN_B64_LEN:
+        raise HTTPException(413, "Image too large or empty")
 
     system_prompt = (
         "You are a certified nutritionist AI with strong food-photography vision. "
@@ -266,9 +433,9 @@ async def scan_meal(payload: MealScanRequest):
 
     try:
         data = await ask_llm_json(system_prompt, user_text, image_b64=payload.image_base64, max_attempts=2)
-    except Exception as e:
+    except Exception:
         logging.exception("LLM scan failed")
-        raise HTTPException(500, f"AI analysis failed: {e}")
+        raise HTTPException(500, "AI analysis failed. Please try again.")
 
     # Clamp + coerce
     def clampf(v, lo, hi, default=0.0):
@@ -303,16 +470,17 @@ async def scan_meal(payload: MealScanRequest):
 
 
 @api_router.post("/meals", response_model=Meal)
-async def create_meal(payload: MealCreate):
+async def create_meal(payload: MealCreate, user: dict = Depends(get_current_user)):
     date = payload.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    meal = Meal(**payload.model_dump(exclude={"date"}), date=date)
+    meal_data = payload.model_dump(exclude={"date"})
+    meal = Meal(**meal_data, user_id=user["user_id"], date=date)
     await db.meals.insert_one(meal.model_dump())
     return meal
 
 
 @api_router.get("/meals", response_model=List[Meal])
-async def list_meals(user_id: str, date: Optional[str] = None):
-    q = {"user_id": user_id}
+async def list_meals(date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {"user_id": user["user_id"]}
     if date:
         q["date"] = date
     docs = await db.meals.find(q, {"_id": 0}).sort("logged_at", -1).to_list(500)
@@ -320,9 +488,9 @@ async def list_meals(user_id: str, date: Optional[str] = None):
 
 
 @api_router.get("/meals/summary")
-async def daily_summary(user_id: str, date: Optional[str] = None):
+async def daily_summary(date: Optional[str] = None, user: dict = Depends(get_current_user)):
     date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    docs = await db.meals.find({"user_id": user_id, "date": date}, {"_id": 0}).to_list(500)
+    docs = await db.meals.find({"user_id": user["user_id"], "date": date}, {"_id": 0}).to_list(500)
     totals = {"calories": 0, "protein_g": 0.0, "carbs_g": 0.0, "fat_g": 0.0, "count": len(docs)}
     for d in docs:
         totals["calories"] += int(d.get("calories", 0))
@@ -333,22 +501,29 @@ async def daily_summary(user_id: str, date: Optional[str] = None):
 
 
 @api_router.delete("/meals/{meal_id}")
-async def delete_meal(meal_id: str):
-    r = await db.meals.delete_one({"id": meal_id})
+async def delete_meal(meal_id: str, user: dict = Depends(get_current_user)):
+    # Ownership check: only the meal's owner can delete it
+    meal = await db.meals.find_one({"id": meal_id}, {"_id": 0})
+    if not meal:
+        raise HTTPException(404, "Meal not found")
+    if meal.get("user_id") != user["user_id"]:
+        raise HTTPException(403, "Not allowed")
+    r = await db.meals.delete_one({"id": meal_id, "user_id": user["user_id"]})
     return {"deleted": r.deleted_count}
 
 
 @api_router.get("/progress")
-async def get_progress(user_id: str, days: int = 7):
-    profile = await db.profiles.find_one({"id": user_id}, {"_id": 0})
+async def get_progress(days: int = 7, user: dict = Depends(get_current_user)):
+    uid = user["user_id"]
+    days = max(1, min(int(days), 90))  # bound the loop
+    profile = await db.profiles.find_one({"user_id": uid}, {"_id": 0})
     target = profile.get("daily_calories", 2000) if profile else 2000
-    from datetime import timedelta
     today = datetime.now(timezone.utc).date()
     result = []
     for i in range(days - 1, -1, -1):
         d = today - timedelta(days=i)
         ds = d.strftime("%Y-%m-%d")
-        docs = await db.meals.find({"user_id": user_id, "date": ds}, {"_id": 0}).to_list(500)
+        docs = await db.meals.find({"user_id": uid, "date": ds}, {"_id": 0}).to_list(500)
         cals = sum(int(x.get("calories", 0)) for x in docs)
         prot = sum(float(x.get("protein_g", 0)) for x in docs)
         result.append({"date": ds, "calories": cals, "protein_g": prot, "target": target})
@@ -356,7 +531,6 @@ async def get_progress(user_id: str, days: int = 7):
 
 
 class MealPlanRequest(BaseModel):
-    user_id: str
     force: bool = False
 
 
@@ -517,35 +691,37 @@ async def _generate_and_store_plan(user_id: str, profile: dict) -> dict:
 
 
 @api_router.post("/mealplan/generate")
-async def generate_meal_plan(payload: MealPlanRequest):
-    profile = await db.profiles.find_one({"id": payload.user_id}, {"_id": 0})
+@limiter.limit("10/hour")
+async def generate_meal_plan(request: Request, payload: MealPlanRequest, user: dict = Depends(get_current_user)):
+    uid = user["user_id"]
+    profile = await db.profiles.find_one({"user_id": uid}, {"_id": 0})
     if not profile:
         raise HTTPException(404, "Profile not found")
     # If not forcing and a fresh plan for this week already exists, return it
     if not payload.force:
-        existing = await db.mealplans.find_one({"user_id": payload.user_id}, {"_id": 0})
+        existing = await db.mealplans.find_one({"user_id": uid}, {"_id": 0})
         if existing and existing.get("week_start") == current_monday_iso():
             return existing
-    return await _generate_and_store_plan(payload.user_id, profile)
+    return await _generate_and_store_plan(uid, profile)
 
 
-@api_router.get("/mealplan/{user_id}")
-async def get_meal_plan(user_id: str, auto_refresh: bool = True):
-    """Return the user's plan. If auto_refresh=True and the stored plan is from a previous
-    week, silently regenerate a fresh plan for the current week."""
-    doc = await db.mealplans.find_one({"user_id": user_id}, {"_id": 0})
+@api_router.get("/mealplan")
+async def get_meal_plan(auto_refresh: bool = True, user: dict = Depends(get_current_user)):
+    """Return the current user's plan. If auto_refresh=True and the stored plan is from a
+    previous week, silently regenerate a fresh plan for the current week."""
+    uid = user["user_id"]
+    doc = await db.mealplans.find_one({"user_id": uid}, {"_id": 0})
     current_week = current_monday_iso()
     if not doc:
         raise HTTPException(404, "No meal plan yet")
     if auto_refresh and doc.get("week_start") != current_week:
-        profile = await db.profiles.find_one({"id": user_id}, {"_id": 0})
+        profile = await db.profiles.find_one({"user_id": uid}, {"_id": 0})
         if profile:
             try:
-                fresh = await _generate_and_store_plan(user_id, profile)
+                fresh = await _generate_and_store_plan(uid, profile)
                 fresh["auto_refreshed"] = True
                 return fresh
             except Exception as e:
-                # Fall back to stale plan if regen fails, but flag it
                 logging.warning("Auto-refresh failed, returning stale plan: %s", e)
                 doc["stale"] = True
                 return doc
@@ -564,6 +740,22 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def _startup_indexes():
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("user_id", unique=True)
+        await db.user_sessions.create_index("session_token", unique=True)
+        await db.user_sessions.create_index("user_id")
+        # TTL: sessions auto-delete when expires_at passes
+        await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+        await db.profiles.create_index("user_id", unique=True)
+        await db.meals.create_index([("user_id", 1), ("date", -1)])
+        await db.mealplans.create_index("user_id", unique=True)
+    except Exception:
+        logging.exception("Index creation failed (non-fatal)")
 
 
 @app.on_event("shutdown")

@@ -6,7 +6,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api, COLORS } from '@/src/lib/api';
-import { storage } from '@/src/lib/storage';
 import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 import { fallbackFoodImage } from '@/src/lib/images';
 
@@ -35,11 +34,9 @@ export default function PlanScreen() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const uid = await storage.getUserId();
-    if (!uid) return;
     setLoading(true);
     try {
-      const p = await api.getMealPlan(uid);
+      const p = await api.getMealPlan();
       setPlan(p);
       if (p?.auto_refreshed) {
         setRefreshedBanner(true);
@@ -55,15 +52,13 @@ export default function PlanScreen() {
       // Ingress may return 502 on the first stale-week auto_refresh call because
       // Gemini takes 60-120s. Poll the non-refreshing GET until the fresh plan
       // lands (server keeps generating in the background) — up to 2 min.
-      const uid2 = await storage.getUserId();
-      if (!uid2) { setLoading(false); return; }
       const before = Date.now();
       let found: any = null;
       const startedIso = new Date(before).toISOString();
       for (let i = 0; i < 24; i++) {
         await new Promise((r) => setTimeout(r, 5000));
         try {
-          const p2 = await api.getMealPlanNoRefresh(uid2);
+          const p2 = await api.getMealPlanNoRefresh();
           if (p2 && p2.week_start === currentMondayIso() && (!p2.created_at || p2.created_at > startedIso)) {
             found = p2;
             break;
@@ -87,13 +82,11 @@ export default function PlanScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const generate = async (force = false) => {
-    const uid = await storage.getUserId();
-    if (!uid) return;
     setGenerating(true);
     setErrorMsg(null);
     const startedIso = new Date().toISOString();
     try {
-      const p = await api.generateMealPlan(uid, force);
+      const p = await api.generateMealPlan(force);
       setPlan(p);
       setDayIdx(0);
     } catch (_) {
@@ -102,7 +95,7 @@ export default function PlanScreen() {
       for (let i = 0; i < 24; i++) {
         await new Promise((r) => setTimeout(r, 5000));
         try {
-          const p2 = await api.getMealPlanNoRefresh(uid);
+          const p2 = await api.getMealPlanNoRefresh();
           if (p2 && p2.week_start === currentMondayIso() && (!p2.created_at || p2.created_at > startedIso)) {
             found = p2;
             break;

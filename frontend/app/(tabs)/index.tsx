@@ -14,7 +14,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api, COLORS } from '@/src/lib/api';
-import { storage } from '@/src/lib/storage';
 import { AnimatedProgressRing, AnimatedMacroBar } from '@/src/components/nutrition';
 import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 import { fallbackFoodImage } from '@/src/lib/images';
@@ -43,18 +42,13 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const id = await storage.getUserId();
-    if (!id) {
-      router.replace('/onboarding');
-      return;
-    }
     try {
       const today = new Date().toISOString().slice(0, 10);
       const [p, m, s, prog] = await Promise.all([
-        api.getProfile(id),
-        api.listMeals(id, today),
-        api.dailySummary(id),
-        api.progress(id, 7),
+        api.getProfile(),
+        api.listMeals(today),
+        api.dailySummary(),
+        api.progress(7),
       ]);
       setProfile(p);
       setMeals(m);
@@ -72,7 +66,7 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 

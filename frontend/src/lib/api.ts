@@ -1,15 +1,42 @@
+import { session } from './session';
+
 const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL as string;
 
-async function req<T = any>(path: string, opts: RequestInit & { timeout?: number } = {}): Promise<T> {
-  const { timeout, ...rest } = opts;
+// Module-level token cache — cleared on logout
+let cachedToken: string | null | undefined = undefined;
+
+export async function primeAuthToken() {
+  cachedToken = await session.get();
+}
+export function clearAuthTokenCache() { cachedToken = null; }
+
+async function getToken(): Promise<string | null> {
+  if (cachedToken === undefined) cachedToken = await session.get();
+  return cachedToken;
+}
+
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null) { onUnauthorized = fn; }
+
+async function req<T = any>(path: string, opts: RequestInit & { timeout?: number; auth?: boolean } = {}): Promise<T> {
+  const { timeout, auth = true, ...rest } = opts;
   const controller = new AbortController();
   const timer = timeout ? setTimeout(() => controller.abort(), timeout) : null;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((rest.headers as Record<string, string>) || {}),
+  };
+  if (auth) {
+    const t = await getToken();
+    if (t) headers.Authorization = `Bearer ${t}`;
+  }
   try {
-    const res = await fetch(`${BASE_URL}/api${path}`, {
-      ...rest,
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(rest.headers || {}) },
-    });
+    const res = await fetch(`${BASE_URL}/api${path}`, { ...rest, signal: controller.signal, headers });
+    if (res.status === 401 && auth) {
+      cachedToken = null;
+      await session.clear();
+      onUnauthorized?.();
+    }
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`${res.status}: ${txt}`);
@@ -21,22 +48,31 @@ async function req<T = any>(path: string, opts: RequestInit & { timeout?: number
 }
 
 export const api = {
+  // Auth
+  exchangeSession: (session_id: string) =>
+    req('/auth/session', { method: 'POST', body: JSON.stringify({ session_id }), auth: false }),
+  me: () => req('/auth/me'),
+  logout: () => req('/auth/logout', { method: 'POST' }),
+
+  // Profile (derived from auth)
   createProfile: (data: any) => req('/profile', { method: 'POST', body: JSON.stringify(data) }),
-  getProfile: (id: string) => req(`/profile/${id}`),
-  updateProfile: (id: string, data: any) => req(`/profile/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  scanMeal: (user_id: string, image_base64: string) =>
-    req('/meals/scan', { method: 'POST', body: JSON.stringify({ user_id, image_base64 }) }),
+  getProfile: () => req('/profile'),
+  updateProfile: (data: any) => req('/profile', { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Meals
+  scanMeal: (image_base64: string) =>
+    req('/meals/scan', { method: 'POST', body: JSON.stringify({ image_base64 }), timeout: 55000 }),
   createMeal: (data: any) => req('/meals', { method: 'POST', body: JSON.stringify(data) }),
-  listMeals: (user_id: string, date?: string) =>
-    req(`/meals?user_id=${user_id}${date ? `&date=${date}` : ''}`),
-  dailySummary: (user_id: string, date?: string) =>
-    req(`/meals/summary?user_id=${user_id}${date ? `&date=${date}` : ''}`),
+  listMeals: (date?: string) => req(`/meals${date ? `?date=${date}` : ''}`),
+  dailySummary: (date?: string) => req(`/meals/summary${date ? `?date=${date}` : ''}`),
   deleteMeal: (id: string) => req(`/meals/${id}`, { method: 'DELETE' }),
-  progress: (user_id: string, days = 7) => req(`/progress?user_id=${user_id}&days=${days}`),
-  generateMealPlan: (user_id: string, force = false) =>
-    req('/mealplan/generate', { method: 'POST', body: JSON.stringify({ user_id, force }), timeout: 55000 }),
-  getMealPlan: (user_id: string) => req(`/mealplan/${user_id}?auto_refresh=true`, { timeout: 55000 }),
-  getMealPlanNoRefresh: (user_id: string) => req(`/mealplan/${user_id}?auto_refresh=false`),
+
+  // Progress + plan
+  progress: (days = 7) => req(`/progress?days=${days}`),
+  generateMealPlan: (force = false) =>
+    req('/mealplan/generate', { method: 'POST', body: JSON.stringify({ force }), timeout: 55000 }),
+  getMealPlan: () => req('/mealplan?auto_refresh=true', { timeout: 55000 }),
+  getMealPlanNoRefresh: () => req('/mealplan?auto_refresh=false'),
 };
 
 export const COLORS = {

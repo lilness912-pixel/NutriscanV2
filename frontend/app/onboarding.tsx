@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { api, COLORS } from '@/src/lib/api';
-import { storage } from '@/src/lib/storage';
+import { useAuth } from '@/src/lib/auth';
 import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 
 const HERO = 'https://images.unsplash.com/photo-1558017487-06bf9f82613a?crop=entropy&cs=srgb&fm=jpg&w=1200&q=85';
@@ -26,6 +26,7 @@ type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 export default function Onboarding() {
   const router = useRouter();
+  const { refreshUser } = useAuth();
   const [step, setStep] = useState<Step>(0);
   const [name, setName] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other' | null>(null);
@@ -60,7 +61,7 @@ export default function Onboarding() {
   const finish = async () => {
     setLoading(true);
     try {
-      const profile = await api.createProfile({
+      await api.createProfile({
         name: name.trim(),
         age: parseInt(age),
         gender,
@@ -69,7 +70,7 @@ export default function Onboarding() {
         activity,
         goal,
       });
-      await storage.setUserId(profile.id);
+      await refreshUser();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/(tabs)');
     } catch (e: any) {

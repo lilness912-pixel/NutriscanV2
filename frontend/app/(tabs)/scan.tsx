@@ -26,7 +26,6 @@ import Animated, {
   interpolate,
 } from 'react-native-reanimated';
 import { api, COLORS } from '@/src/lib/api';
-import { storage } from '@/src/lib/storage';
 import { BouncyPressable, FadeInUp } from '@/src/components/motion';
 
 type ScanResult = {
@@ -123,11 +122,9 @@ export default function ScanScreen() {
   const analyze = async (b64?: string | null) => {
     const payload = b64 || imageBase64;
     if (!payload) return;
-    const uid = await storage.getUserId();
-    if (!uid) return;
     setAnalyzing(true);
     try {
-      const r: ScanResult = await api.scanMeal(uid, payload);
+      const r: ScanResult = await api.scanMeal(payload);
       setResult(r);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const h = new Date().getHours();
@@ -148,12 +145,10 @@ export default function ScanScreen() {
 
   const save = async () => {
     if (!result) return;
-    const uid = await storage.getUserId();
-    if (!uid) return;
     setSaving(true);
     try {
       await api.createMeal({
-        user_id: uid, name: result.name, calories: Math.round(result.calories),
+        name: result.name, calories: Math.round(result.calories),
         protein_g: result.protein_g, carbs_g: result.carbs_g, fat_g: result.fat_g,
         portion: result.portion, category, image_base64: imageBase64,
       });

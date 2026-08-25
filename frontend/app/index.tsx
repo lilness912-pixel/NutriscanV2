@@ -1,21 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { storage } from '@/src/lib/storage';
+import { useAuth } from '@/src/lib/auth';
 import { COLORS } from '@/src/lib/api';
 
 export default function Index() {
   const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const { loading, user } = useAuth();
 
   useEffect(() => {
-    (async () => {
-      const id = await storage.getUserId();
-      if (id) router.replace('/(tabs)');
-      else router.replace('/onboarding');
-      setChecking(false);
-    })();
-  }, []);
+    if (loading) return;
+    if (!user) router.replace('/login');
+    else if (!user.has_profile) router.replace('/onboarding');
+    else router.replace('/(tabs)');
+  }, [loading, user, router]);
 
   return (
     <View style={styles.container} testID="splash-screen">
